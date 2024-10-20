@@ -1,6 +1,14 @@
 # tree-create
 
    `tree-create` is a command-line utility that creates a directory structure based on a text input representing a tree-like structure.
+    
+   ## Installation
+
+   If you have Rust installed, you can install tree-create directly from crates.io:
+
+   ```
+   cargo install tree-create
+   ```
 
    ## Usage
 
