@@ -2,8 +2,209 @@ use std::fs;
 use std::io::{self, BufRead};
 use std::path::Path;
 
+#[cfg(test)]
+mod tests;
+
+#[derive(Debug, PartialEq)]
+struct TreeNode {
+    name: String,
+    indent_level: usize,
+}
+
+#[derive(Debug)]
+struct TreeStructure {
+    nodes: Vec<TreeNode>,
+    #[allow(dead_code)] // This is used implicitly in Debug
+    indent_width: usize,
+}
+
+impl TreeStructure {
+    /// Parse a string in either ASCII tree format or indented format into our internal representation
+    pub fn from_string(input: &str) -> io::Result<Self> {
+        if input.is_empty() {
+            return Err(io::Error::new(io::ErrorKind::InvalidData, "Input is empty"));
+        }
+
+        let first_line = input.lines().next().unwrap_or("");
+        let leading_spaces = first_line.chars().take_while(|c| c.is_whitespace()).count();
+
+        if leading_spaces > 0 {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "Root directory (line 1) should not be indented",
+            ));
+        }
+
+        if is_ascii_tree(input) {
+            Self::from_ascii_tree(input)
+        } else {
+            Self::from_indented(input)
+        }
+    }
+
+    /// Convert ASCII tree format ("├── file.txt") to our internal representation
+    fn from_ascii_tree(input: &str) -> io::Result<Self> {
+        let mut nodes: Vec<TreeNode> = Vec::new();
+
+        for line in input.lines() {
+            if line.trim().is_empty() {
+                continue;
+            }
+
+            // Count the indent level based on the tree characters
+            let prefixes = line
+                .chars()
+                .take_while(|&c| c == ' ' || c == '│' || c == '├' || c == '└')
+                .count();
+
+            // Each level consists of either "│   " (4 chars) or "├── " (4 chars)
+            let indent_level = if prefixes == 0 { 0 } else { (prefixes + 3) / 4 };
+
+            // Extract the name by trimming tree characters
+            let name = line
+                .trim_start_matches(|c: char| {
+                    c.is_whitespace() || c == '│' || c == '├' || c == '└' || c == '─'
+                })
+                .to_string();
+
+            nodes.push(TreeNode { name, indent_level });
+        }
+
+        if nodes.is_empty() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "No valid nodes found",
+            ));
+        }
+
+        Ok(Self {
+            nodes,
+            indent_width: 2, // Default indent width for output
+        })
+    }
+
+    /// Parse simple indented format into our internal representation
+    fn from_indented(input: &str) -> io::Result<Self> {
+        let mut nodes: Vec<TreeNode> = Vec::new();
+        let mut indent_width = None;
+
+        for (line_num, line) in input.lines().enumerate() {
+            if line.trim().is_empty() {
+                continue;
+            }
+
+            let spaces = line.chars().take_while(|c| c.is_whitespace()).count();
+            let name = line.trim().to_string();
+
+            // If this is the first indented line, use it to determine indent width
+            if spaces > 0 && indent_width.is_none() {
+                indent_width = Some(spaces);
+            }
+
+            let indent_width = indent_width.unwrap_or(2);
+
+            // Validate indentation is consistent
+            if spaces % indent_width != 0 {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    format!(
+                        "Inconsistent indentation at line {}. Expected a multiple of {} spaces (found {} spaces)",
+                        line_num + 1, indent_width, spaces
+                    )
+                ));
+            }
+
+            let indent_level = spaces / indent_width;
+
+            // Validate indent level doesn't skip levels
+            if let Some(prev_node) = nodes.last() {
+                if indent_level > prev_node.indent_level + 1 {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        format!(
+                            "Invalid indentation at line {}. Indentation can only increase by one level at a time",
+                            line_num + 1
+                        )
+                    ));
+                }
+            }
+
+            nodes.push(TreeNode { name, indent_level });
+        }
+
+        if nodes.is_empty() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "No valid nodes found",
+            ));
+        }
+
+        Ok(Self {
+            nodes,
+            indent_width: indent_width.unwrap_or(2),
+        })
+    }
+
+    /// Convert the internal representation to ASCII tree format
+    fn to_ascii_tree(&self) -> String {
+        let mut result = Vec::new();
+
+        // First pass: determine which levels have subsequent siblings
+        let mut level_has_next = [false; 32]; // 32 levels should be enough
+
+        for (i, node) in self.nodes.iter().enumerate() {
+            let current_level = node.indent_level;
+
+            // Look ahead to see if there are any more nodes at this level
+            if let Some(next_node) = self.nodes.get(i + 1) {
+                if next_node.indent_level == current_level {
+                    level_has_next[current_level] = true;
+                }
+            }
+        }
+
+        // Second pass: generate the tree
+        for node in self.nodes.iter() {
+            let mut prefix = String::new();
+
+            // Add vertical lines for previous levels that have subsequent nodes
+            prefix.extend(
+                level_has_next
+                    .iter()
+                    .take(node.indent_level)
+                    .skip(1)
+                    .map(|&has_next| if has_next { "│   " } else { "    " }),
+            );
+
+            // Add the appropriate branch character
+            if node.indent_level > 0 {
+                prefix.push_str(if level_has_next[node.indent_level] {
+                    "├── "
+                } else {
+                    "└── "
+                });
+            }
+
+            result.push(format!("{}{}", prefix, node.name));
+        }
+
+        result.join("\n")
+    }
+}
+
+/// Check if input is using ASCII tree format
+fn is_ascii_tree(input: &str) -> bool {
+    input.contains("├──") || input.contains("└──") || input.contains("│")
+}
+
 pub fn create_tree(input: &str, base_path: &Path) -> io::Result<()> {
-    let reader = io::BufReader::new(input.as_bytes());
+    // First convert the input to our internal representation
+    let tree = TreeStructure::from_string(input)?;
+
+    // Then convert to ASCII tree format for processing
+    let ascii_tree = tree.to_ascii_tree();
+
+    let reader = io::BufReader::new(ascii_tree.as_bytes());
     let mut lines = reader.lines().peekable();
 
     // Get the root directory name from the first line
@@ -72,100 +273,4 @@ pub fn create_tree(input: &str, base_path: &Path) -> io::Result<()> {
     }
 
     Ok(())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use tempfile::TempDir;
-
-    #[test]
-    fn test_create_simple_structure() -> io::Result<()> {
-        let temp_dir = TempDir::new()?;
-        let input = "
-test_project/
-    src/
-        main.rs
-    Cargo.toml
-";
-        create_tree(input, temp_dir.path())?;
-
-        assert!(temp_dir.path().join("test_project").is_dir());
-        assert!(temp_dir.path().join("test_project/src").is_dir());
-        assert!(temp_dir.path().join("test_project/src/main.rs").is_file());
-        assert!(temp_dir.path().join("test_project/Cargo.toml").is_file());
-
-        Ok(())
-    }
-
-    #[test]
-    fn test_create_nested_structure() -> io::Result<()> {
-        let temp_dir = TempDir::new()?;
-        let input = "
-nested_project/
-    src/
-        module1/
-            mod.rs
-        module2/
-            submodule/
-                mod.rs
-    tests/
-        integration_tests.rs
-    Cargo.toml
-";
-        create_tree(input, temp_dir.path())?;
-
-        assert!(temp_dir.path().join("nested_project").is_dir());
-        assert!(temp_dir.path().join("nested_project/src").is_dir());
-        assert!(temp_dir.path().join("nested_project/src/module1").is_dir());
-        assert!(temp_dir
-            .path()
-            .join("nested_project/src/module1/mod.rs")
-            .is_file());
-        assert!(temp_dir
-            .path()
-            .join("nested_project/src/module2/submodule")
-            .is_dir());
-        assert!(temp_dir
-            .path()
-            .join("nested_project/src/module2/submodule/mod.rs")
-            .is_file());
-        assert!(temp_dir.path().join("nested_project/tests").is_dir());
-        assert!(temp_dir
-            .path()
-            .join("nested_project/tests/integration_tests.rs")
-            .is_file());
-        assert!(temp_dir.path().join("nested_project/Cargo.toml").is_file());
-
-        Ok(())
-    }
-
-    #[test]
-    fn test_create_existing_structure() -> io::Result<()> {
-        let temp_dir = TempDir::new()?;
-        fs::create_dir(temp_dir.path().join("existing_project"))?;
-        fs::create_dir(temp_dir.path().join("existing_project/src"))?;
-        fs::File::create(temp_dir.path().join("existing_project/src/main.rs"))?;
-
-        let input = "
-existing_project/
-    src/
-        main.rs
-    Cargo.toml
-";
-        create_tree(input, temp_dir.path())?;
-
-        assert!(temp_dir.path().join("existing_project").is_dir());
-        assert!(temp_dir.path().join("existing_project/src").is_dir());
-        assert!(temp_dir
-            .path()
-            .join("existing_project/src/main.rs")
-            .is_file());
-        assert!(temp_dir
-            .path()
-            .join("existing_project/Cargo.toml")
-            .is_file());
-
-        Ok(())
-    }
 }

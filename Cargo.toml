@@ -10,6 +10,8 @@ keywords = ["cli", "filesystem", "directory", "tree"]
 categories = ["command-line-utilities"]
 
 [dependencies]
+clap = { version = "4.5.20", features = ["derive"]}
+tempfile = "3.2"
 
 [dev-dependencies]
 tempfile = "3.2"

@@ -1,50 +1,117 @@
 # tree-create
 
-   `tree-create` is a command-line utility that creates a directory structure based on a text input representing a tree-like structure.
-    
-   ## Installation
+A command-line utility to create directory structures from tree-like text input.
 
-   If you have Rust installed, you can install tree-create directly from crates.io:
+## Installation
 
-   ```
-   cargo install tree-create
-   ```
+```bash
+cargo install tree-create
+```
 
-   ## Usage
+## Usage
 
-   ```
-   tree-create <input_file>
-   ```
+`tree-create` supports multiple ways to input your directory structure:
 
-   Where `<input_file>` is a text file containing the desired directory structure in a tree-like format.
+### Interactive Editor (Default)
+Simply run `tree-create` with no arguments to open your default editor:
 
-   ## Example Input File
+```bash
+tree-create
+```
 
-   ```
-   my_project/
-       src/
-           main.rs
-       tests/
-           test_main.rs
-       Cargo.toml
-   ```
+This will open your system's default editor (defined by `$EDITOR`) where you can input your directory structure. Save and close the file when you're done, and it will create the structure.
 
-   ## Building
+### File Input
+Pass a file containing your directory structure:
 
-   To build the project, ensure you have Rust installed and run:
+```bash
+tree-create input.txt
+```
 
-   ```
-   cargo build --release
-   ```
+### Inline Input
+Use the `-i` or `--inline` flag to input the structure directly in the terminal:
 
-   ## Running Tests
+```bash
+tree-create -i
+```
 
-   To run the tests:
+## Input Formats
 
-   ```
-   cargo test
-   ```
+`tree-create` supports two input formats:
 
-   ## License
+### ASCII Tree Format
+```
+my-project/
+├── src/
+│   ├── main.rs
+│   └── lib.rs
+└── Cargo.toml
+```
 
-   This project is licensed under the MIT License - see the LICENSE file for details.
+### Simple Indented Format
+You can use any consistent indentation (spaces or tabs):
+```
+my-project/
+  src/
+    main.rs
+    lib.rs
+  Cargo.toml
+```
+
+or
+```
+my-project/
+    src/
+        main.rs
+        lib.rs
+    Cargo.toml
+```
+
+## Rules and Validation
+
+- Root directory must not be indented
+- Indentation must be consistent throughout the structure
+- Can't skip indentation levels
+- Directories must end with a forward slash (`/`)
+- Empty lines are ignored
+
+## Examples
+
+Create a simple Rust project structure:
+```
+my-project/
+  src/
+    main.rs
+    lib.rs
+  Cargo.toml
+```
+
+Create a more complex web project:
+```
+web-app/
+  src/
+    components/
+      ui/
+        buttons/
+          primary.rs
+          secondary.rs
+        inputs/
+          text.rs
+          number.rs
+    pages/
+      home.rs
+      about.rs
+  public/
+    index.html
+    styles.css
+  Cargo.toml
+```
+
+## Supported Editors
+
+The following editors are explicitly supported for interactive mode:
+- vim/neovim
+- nano
+- VS Code (automatically adds `--wait` flag)
+
+Other editors may work but are not officially supported.
