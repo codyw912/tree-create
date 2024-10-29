@@ -25,6 +25,10 @@ struct Cli {
     /// Accept inline input
     #[arg(short, long)]
     inline: bool,
+
+    /// Force creation by overwriting exising files and directories
+    #[arg(short, long)]
+    force: bool,
 }
 
 fn main() -> io::Result<()> {
@@ -45,7 +49,7 @@ fn main() -> io::Result<()> {
         }
     };
 
-    create_tree(&input_content, &current_dir)
+    create_tree(&input_content, &current_dir, cli.force)
 }
 
 fn get_editor_command() -> (String, Vec<String>) {

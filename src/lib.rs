@@ -197,8 +197,8 @@ fn is_ascii_tree(input: &str) -> bool {
     input.contains("├──") || input.contains("└──") || input.contains("│")
 }
 
-pub fn create_tree(input: &str, base_path: &Path) -> io::Result<()> {
-    // First convert the input to our internal representation
+pub fn create_tree(input: &str, base_path: &Path, force: bool) -> io::Result<()> {
+    // Convert the input to our internal representation
     let tree = TreeStructure::from_string(input)?;
 
     // Then convert to ASCII tree format for processing
@@ -215,11 +215,21 @@ pub fn create_tree(input: &str, base_path: &Path) -> io::Result<()> {
     };
 
     let base_path = base_path.join(&root_name);
-    if !base_path.exists() {
+    if base_path.exists() {
+        if force {
+            if base_path.is_file() {
+                fs::remove_file(&base_path)?;
+            } else {
+                fs::remove_dir_all(&base_path)?;
+            }
+            fs::create_dir_all(&base_path)?;
+            println!("Overwrote existing directory: {:?}", base_path);
+        } else {
+            println!("Directory already exists: {:?}", base_path);
+        }
+    } else {
         fs::create_dir_all(&base_path)?;
         println!("Created root directory: {:?}", base_path);
-    } else {
-        println!("Root directory already exists: {:?}", base_path);
     }
 
     let mut current_depth = 0;
@@ -252,22 +262,41 @@ pub fn create_tree(input: &str, base_path: &Path) -> io::Result<()> {
         full_path.push(&name);
 
         if name.ends_with('/') {
-            if !full_path.exists() {
+            if full_path.exists() {
+                if force {
+                    if full_path.is_file() {
+                        fs::remove_file(&full_path)?;
+                        fs::create_dir_all(&full_path)?;
+                        println!("Overwrote file with directory: {:?}", full_path);
+                    } else {
+                        // Directory exists, but we don't remove it as it might contain other files
+                        println!("Using existing directory: {:?}", full_path);
+                    }
+                } else {
+                    println!("Directory already exists: {:?}", full_path);
+                }
+            } else {
                 fs::create_dir_all(&full_path)?;
                 println!("Created directory: {:?}", full_path);
-            } else {
-                println!("Directory already exists: {:?}", full_path);
             }
             path_stack.push(full_path);
         } else {
             if let Some(parent) = full_path.parent() {
                 fs::create_dir_all(parent)?;
             }
-            if !full_path.exists() {
+            if full_path.exists() {
+                if force {
+                    if full_path.is_dir() {
+                        fs::remove_dir_all(&full_path)?;
+                    }
+                    fs::write(&full_path, "")?;
+                    println!("Overwrote existing file: {:?}", full_path);
+                } else {
+                    println!("File already exists: {:?}", full_path);
+                }
+            } else {
                 fs::File::create(&full_path)?;
                 println!("Created file: {:?}", full_path);
-            } else {
-                println!("File already exists: {:?}", full_path);
             }
         }
     }
