@@ -42,7 +42,7 @@ project/
 │   └── lib.rs
 └── Cargo.toml";
 
-    create_tree(input, dir.path())?;
+    create_tree(input, dir.path(), false)?; 
 
     verify_structure(dir.path(), &[
         "project/",
@@ -64,7 +64,7 @@ project/
     lib.rs
   Cargo.toml";
 
-    create_tree(input, dir.path())?;
+    create_tree(input, dir.path(), false)?;
 
     verify_structure(dir.path(), &[
         "project/",
@@ -91,7 +91,7 @@ project/
           text.rs
           number.rs";
 
-    create_tree(input, dir.path())?;
+    create_tree(input, dir.path(), false)?;
 
     verify_structure(dir.path(), &[
         "project/",
@@ -110,7 +110,7 @@ project/
 #[test]
 fn test_empty_input() {
     let dir = tempdir().unwrap();
-    let result = create_tree("", dir.path());
+    let result = create_tree("", dir.path(), false);
     assert!(result.is_err());
     assert_eq!(
         result.unwrap_err().to_string(),
@@ -123,7 +123,7 @@ fn test_indented_root_error() {
     let dir = tempdir().unwrap();
     let input = "  project/\n  src/";
     
-    let result = create_tree(input, dir.path());
+    let result = create_tree(input, dir.path(), false);
     assert!(result.is_err());
     assert_eq!(
         result.unwrap_err().to_string(),
@@ -144,7 +144,7 @@ project/
 └── src/
     └── main.rs";
 
-    create_tree(input, dir.path())?;
+    create_tree(input, dir.path(), false)?;
 
     verify_structure(dir.path(), &[
         "project/",
@@ -161,7 +161,7 @@ project/
   src/
    main.rs";
     
-    let result = create_tree(input, dir.path());
+    let result = create_tree(input, dir.path(), false);
     assert!(result.is_err());
     assert!(result.unwrap_err().to_string().contains("Inconsistent indentation"));
 }
@@ -177,7 +177,7 @@ project/
 \t\tlib.rs
 \tCargo.toml";
 
-    create_tree(input, dir.path())?;
+    create_tree(input, dir.path(), false)?;
 
     verify_structure(dir.path(), &[
         "project/",
@@ -186,4 +186,46 @@ project/
         "project/src/lib.rs",
         "project/Cargo.toml",
     ])
+}
+
+#[test]
+fn test_force_overwrite() -> io::Result<()> {
+    let dir = tempdir()?;
+    
+    // Create an initial structure
+    let initial_input = "\
+project/
+  src/
+    main.rs";
+
+    create_tree(initial_input, dir.path(), false)?;
+    
+    // Write some content to main.rs
+    fs::write(
+        dir.path().join("project/src/main.rs"),
+        "initial content"
+    )?;
+    
+    // Try to create a different structure with the same root
+    let new_input = "\
+project/
+  src/
+    main.rs
+    lib.rs";
+
+    // First without force (should preserve main.rs content)
+    create_tree(new_input, dir.path(), false)?;
+    assert_eq!(
+        fs::read_to_string(dir.path().join("project/src/main.rs"))?,
+        "initial content"
+    );
+    
+    // Then with force (should overwrite main.rs)
+    create_tree(new_input, dir.path(), true)?;
+    assert_eq!(
+        fs::read_to_string(dir.path().join("project/src/main.rs"))?,
+        ""
+    );
+    
+    Ok(())
 }

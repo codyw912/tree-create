@@ -107,6 +107,25 @@ web-app/
   Cargo.toml
 ```
 
+## Handling Existing Files and Directories
+
+By default, `tree-create` will:
+- Skip creating directories and files that already exist (preserving their contents)
+- Create any new directories and files in the structure
+- Print messages indicating which items were skipped and which were created
+
+To overwrite existing files and directories, use the `--force` flag:
+```bash
+tree-create --force input.txt
+```
+
+When using `--force`:
+- Existing files will be overwritten (emptied)
+- Existing directories will be preserved, but any files specified in the tree will be overwritten
+- If a file exists where a directory is specified (or vice versa), it will be replaced
+
+**Note:** Be careful with `--force` as it will overwrite files without confirmation.
+
 ## Supported Editors
 
 The following editors are explicitly supported for interactive mode:
