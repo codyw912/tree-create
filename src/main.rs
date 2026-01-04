@@ -29,6 +29,10 @@ struct Cli {
     /// Force creation by overwriting exising files and directories
     #[arg(short, long)]
     force: bool,
+
+    /// Show what files/directories would be created without actually creating them
+    #[arg(short = 'n', long)]
+    dry_run: bool,
 }
 
 fn main() -> io::Result<()> {
@@ -49,28 +53,28 @@ fn main() -> io::Result<()> {
         }
     };
 
-    create_tree(&input_content, &current_dir, cli.force)
+    create_tree(&input_content, &current_dir, cli.force, cli.dry_run)
 }
 
 fn get_editor_command() -> (String, Vec<String>) {
     let editor = env::var("EDITOR").unwrap_or_else(|_| "vim".to_string());
     let mut parts: Vec<String> = editor.split_whitespace().map(String::from).collect();
-    
+
     // Handle special cases for known editors
     match parts.first().map(|s| s.as_str()) {
         Some("code") => {
             if !parts.contains(&"--wait".to_string()) {
                 parts.push("--wait".to_string());
             }
-        },
+        }
         Some("vim") | Some("nvim") | Some("nano") => {
             // These editors work well by default
-        },
+        }
         _ => {
             eprintln!("Note: Using unsupported editor '{}'. For best experience, use vim, nvim, nano, or VS Code.", parts[0]);
         }
     }
-    
+
     let program = parts.remove(0);
     (program, parts)
 }
@@ -78,7 +82,7 @@ fn get_editor_command() -> (String, Vec<String>) {
 fn get_input_from_editor() -> io::Result<String> {
     let temp_file = NamedTempFile::new()?;
     let temp_path = temp_file.path().to_path_buf();
-    
+
     let template = "# Enter your tree structure below using either format:\n\
                    #\n\
                    # Tree format with ASCII characters:\n\
@@ -94,7 +98,7 @@ fn get_input_from_editor() -> io::Result<String> {
                    #     main.rs\n\
                    #     lib.rs\n\
                    #   Cargo.toml\n";
-    
+
     let initial_content = template.to_string();
     fs::write(&temp_path, &initial_content)?;
 
@@ -106,10 +110,7 @@ fn get_input_from_editor() -> io::Result<String> {
         .status()?;
 
     if !status.success() {
-        return Err(io::Error::new(
-            io::ErrorKind::Other,
-            "Editor aborted",
-        ));
+        return Err(io::Error::new(io::ErrorKind::Other, "Editor aborted"));
     }
 
     let final_content = fs::read_to_string(&temp_path)?;
@@ -121,10 +122,7 @@ fn get_input_from_editor() -> io::Result<String> {
     eprintln!("---END---");
 
     if final_content == initial_content {
-        return Err(io::Error::new(
-            io::ErrorKind::Other,
-            "Editor aborted",
-        ));
+        return Err(io::Error::new(io::ErrorKind::Other, "Editor aborted"));
     }
 
     let processed_content: String = final_content
@@ -137,10 +135,7 @@ fn get_input_from_editor() -> io::Result<String> {
     let processed_content = processed_content.trim();
 
     if processed_content.is_empty() {
-        return Err(io::Error::new(
-            io::ErrorKind::Other,
-            "No input provided",
-        ));
+        return Err(io::Error::new(io::ErrorKind::Other, "No input provided"));
     }
 
     Ok(processed_content.to_string())
@@ -169,10 +164,7 @@ fn get_inline_input() -> io::Result<String> {
     let content = content.trim();
 
     if content.is_empty() {
-        return Err(io::Error::new(
-            io::ErrorKind::Other,
-            "No input provided",
-        ));
+        return Err(io::Error::new(io::ErrorKind::Other, "No input provided"));
     }
 
     Ok(content.to_string())

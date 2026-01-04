@@ -214,7 +214,7 @@ my-project/
         Ok(())
     }
 
-#[test]
+    #[test]
     fn test_indented_root_error() {
         let input = "  my-project/\n  src/";
 
