@@ -218,16 +218,22 @@ pub fn create_tree(input: &str, base_path: &Path, force: bool, dry_run: bool) ->
     if dry_run {
         println!("dry-run Would create directory: {}", base_path.display());
     } else if base_path.exists() {
-        if force {
-            if base_path.is_file() {
+        if base_path.is_file() {
+            if force {
                 fs::remove_file(&base_path)?;
+                fs::create_dir_all(&base_path)?;
+                println!("Overwrote file with root directory: {:?}", base_path);
             } else {
-                fs::remove_dir_all(&base_path)?;
+                return Err(io::Error::new(
+                    io::ErrorKind::AlreadyExists,
+                    format!(
+                        "A file exists where the root directory is required: {}",
+                        base_path.display()
+                    ),
+                ));
             }
-            fs::create_dir_all(&base_path)?;
-            println!("Overwrote existing directory: {:?}", base_path);
         } else {
-            println!("Directory already exists: {:?}", base_path);
+            println!("Using existing root directory: {:?}", base_path);
         }
     } else {
         fs::create_dir_all(&base_path)?;

@@ -233,3 +233,26 @@ project/
 
     Ok(())
 }
+
+#[test]
+fn test_force_preserves_unlisted_files_in_existing_root() -> io::Result<()> {
+    let dir = tempdir()?;
+    let project_dir = dir.path().join("project");
+    fs::create_dir(&project_dir)?;
+    fs::write(project_dir.join("notes.txt"), "keep this content")?;
+
+    let input = "\
+project/
+  src/
+    main.rs";
+
+    create_tree(input, dir.path(), true, false)?;
+
+    assert_eq!(
+        fs::read_to_string(project_dir.join("notes.txt"))?,
+        "keep this content"
+    );
+    assert!(project_dir.join("src/main.rs").is_file());
+
+    Ok(())
+}
