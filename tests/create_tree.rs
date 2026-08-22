@@ -256,3 +256,59 @@ project/
 
     Ok(())
 }
+
+#[test]
+fn test_adjacent_empty_directories_are_siblings() -> io::Result<()> {
+    let dir = tempdir()?;
+    let input = "project/\n  first/\n  second/\n  README.md";
+
+    create_tree(input, dir.path(), false, false)?;
+
+    verify_structure(
+        dir.path(),
+        &["project/first/", "project/second/", "project/README.md"],
+    )?;
+    assert!(!dir.path().join("project/first/second").exists());
+    Ok(())
+}
+
+#[test]
+fn test_rejects_path_traversal() {
+    let dir = tempdir().unwrap();
+    let result = create_tree("project/\n  ../\n    escaped.txt", dir.path(), false, false);
+
+    assert_eq!(result.unwrap_err().kind(), io::ErrorKind::InvalidData);
+    assert!(!dir.path().join("escaped.txt").exists());
+}
+
+#[test]
+fn test_rejects_children_of_files() {
+    let dir = tempdir().unwrap();
+    let result = create_tree(
+        "project/\n  file.txt\n    child.txt",
+        dir.path(),
+        false,
+        false,
+    );
+
+    assert_eq!(result.unwrap_err().kind(), io::ErrorKind::InvalidData);
+    assert!(!dir.path().join("project").exists());
+}
+
+#[test]
+fn test_rejects_non_directory_root() {
+    let dir = tempdir().unwrap();
+    let result = create_tree("project", dir.path(), false, false);
+
+    assert_eq!(result.unwrap_err().kind(), io::ErrorKind::InvalidData);
+    assert!(!dir.path().join("project").exists());
+}
+
+#[test]
+fn test_dry_run_does_not_modify_filesystem() -> io::Result<()> {
+    let dir = tempdir()?;
+    create_tree("project/\n  src/\n    main.rs", dir.path(), false, true)?;
+
+    assert!(!dir.path().join("project").exists());
+    Ok(())
+}
