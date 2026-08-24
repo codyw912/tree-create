@@ -12,6 +12,13 @@ mod tree_structure_tests {
     }
 
     #[test]
+    fn test_parse_whitespace_only_input_as_empty() {
+        let result = TreeStructure::from_string("\n \t\n");
+
+        assert_eq!(result.unwrap_err().to_string(), "Input is empty");
+    }
+
+    #[test]
     fn test_parse_simple_indented() -> io::Result<()> {
         let input = "\
 my-project/
@@ -223,6 +230,46 @@ my-project/
         assert_eq!(
             result.unwrap_err().to_string(),
             "Root directory (line 1) should not be indented"
+        );
+    }
+
+    #[test]
+    fn test_leading_empty_lines_are_ignored() -> io::Result<()> {
+        let tree = TreeStructure::from_string("\n  \nmy-project/\n  src/")?;
+
+        assert_eq!(tree.nodes.len(), 2);
+        assert_eq!(tree.nodes[0].name, "my-project/");
+        assert_eq!(tree.nodes[0].indent_level, 0);
+        Ok(())
+    }
+
+    #[test]
+    fn test_indented_root_after_empty_lines_reports_source_line() {
+        let result = TreeStructure::from_string("\n  \n  my-project/\n    src/");
+
+        assert_eq!(
+            result.unwrap_err().to_string(),
+            "Root directory (line 3) should not be indented"
+        );
+    }
+
+    #[test]
+    fn test_ascii_indented_root_after_empty_line_reports_source_line() {
+        let result = TreeStructure::from_string("\n  my-project/\n  └── src/");
+
+        assert_eq!(
+            result.unwrap_err().to_string(),
+            "Root directory (line 2) should not be indented"
+        );
+    }
+
+    #[test]
+    fn test_validation_errors_report_physical_source_lines() {
+        let result = TreeStructure::from_string("\nmy-project/\n\nother/");
+
+        assert_eq!(
+            result.unwrap_err().to_string(),
+            "Multiple root nodes are not supported (line 4)"
         );
     }
 

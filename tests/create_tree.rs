@@ -134,6 +134,28 @@ fn test_indented_root_error() {
 }
 
 #[test]
+fn test_leading_empty_lines_are_ignored() -> io::Result<()> {
+    let dir = tempdir()?;
+
+    create_tree("\n \t\nproject/\n  src/", dir.path(), false, false)?;
+
+    assert!(dir.path().join("project/src").is_dir());
+    Ok(())
+}
+
+#[test]
+fn test_indented_root_after_empty_lines_is_rejected_without_mutation() {
+    let dir = tempdir().unwrap();
+    let result = create_tree("\n  \n  project/\n    src/", dir.path(), false, false);
+
+    assert_eq!(
+        result.unwrap_err().to_string(),
+        "Root directory (line 3) should not be indented"
+    );
+    assert!(!dir.path().join("project").exists());
+}
+
+#[test]
 fn test_creating_in_existing_directory() -> io::Result<()> {
     let dir = tempdir()?;
 

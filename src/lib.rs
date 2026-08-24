@@ -14,6 +14,7 @@ struct TreeNode {
 #[derive(Debug)]
 struct TreeStructure {
     nodes: Vec<TreeNode>,
+    source_lines: Vec<usize>,
     #[allow(dead_code)] // This is used implicitly in Debug
     indent_width: usize,
 }
@@ -21,18 +22,17 @@ struct TreeStructure {
 impl TreeStructure {
     /// Parse a string in either ASCII tree format or indented format into our internal representation
     pub fn from_string(input: &str) -> io::Result<Self> {
-        if input.is_empty() {
-            return Err(io::Error::new(io::ErrorKind::InvalidData, "Input is empty"));
-        }
+        let (root_line_index, root_line) = input
+            .lines()
+            .enumerate()
+            .find(|(_, line)| !line.trim().is_empty())
+            .ok_or_else(|| invalid_data("Input is empty"))?;
 
-        let first_line = input.lines().next().unwrap_or("");
-        let leading_spaces = first_line.chars().take_while(|c| c.is_whitespace()).count();
-
-        if leading_spaces > 0 {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                "Root directory (line 1) should not be indented",
-            ));
+        if root_line.chars().next().is_some_and(char::is_whitespace) {
+            return Err(invalid_data(format!(
+                "Root directory (line {}) should not be indented",
+                root_line_index + 1
+            )));
         }
 
         if is_ascii_tree(input) {
@@ -45,8 +45,9 @@ impl TreeStructure {
     /// Convert ASCII tree format ("├── file.txt") to our internal representation
     fn from_ascii_tree(input: &str) -> io::Result<Self> {
         let mut nodes: Vec<TreeNode> = Vec::new();
+        let mut source_lines = Vec::new();
 
-        for line in input.lines() {
+        for (line_num, line) in input.lines().enumerate() {
             if line.trim().is_empty() {
                 continue;
             }
@@ -72,6 +73,7 @@ impl TreeStructure {
                 .to_string();
 
             nodes.push(TreeNode { name, indent_level });
+            source_lines.push(line_num + 1);
         }
 
         if nodes.is_empty() {
@@ -83,6 +85,7 @@ impl TreeStructure {
 
         let tree = Self {
             nodes,
+            source_lines,
             indent_width: 2, // Default indent width for output
         };
         tree.validate()?;
@@ -92,6 +95,7 @@ impl TreeStructure {
     /// Parse simple indented format into our internal representation
     fn from_indented(input: &str) -> io::Result<Self> {
         let mut nodes: Vec<TreeNode> = Vec::new();
+        let mut source_lines = Vec::new();
         let mut indent_width = None;
 
         for (line_num, line) in input.lines().enumerate() {
@@ -136,6 +140,7 @@ impl TreeStructure {
             }
 
             nodes.push(TreeNode { name, indent_level });
+            source_lines.push(line_num + 1);
         }
 
         if nodes.is_empty() {
@@ -147,6 +152,7 @@ impl TreeStructure {
 
         let tree = Self {
             nodes,
+            source_lines,
             indent_width: indent_width.unwrap_or(2),
         };
         tree.validate()?;
@@ -155,34 +161,38 @@ impl TreeStructure {
 
     fn validate(&self) -> io::Result<()> {
         let root = &self.nodes[0];
+        let root_line = self.source_lines[0];
+        if root.indent_level != 0 {
+            return Err(invalid_data(format!(
+                "Root directory (line {root_line}) should not be indented"
+            )));
+        }
         if !root.name.ends_with('/') {
-            return Err(invalid_data(
-                "Root node must be a directory ending with '/'",
-            ));
+            return Err(invalid_data(format!(
+                "Root node (line {root_line}) must be a directory ending with '/'"
+            )));
         }
 
         for (index, node) in self.nodes.iter().enumerate() {
-            validate_node_name(&node.name, index + 1)?;
+            let line = self.source_lines[index];
+            validate_node_name(&node.name, line)?;
 
             if index > 0 && node.indent_level == 0 {
                 return Err(invalid_data(format!(
-                    "Multiple root nodes are not supported (line {})",
-                    index + 1
+                    "Multiple root nodes are not supported (line {line})"
                 )));
             }
 
             if let Some(previous) = index.checked_sub(1).and_then(|i| self.nodes.get(i)) {
                 if node.indent_level > previous.indent_level + 1 {
                     return Err(invalid_data(format!(
-                        "Invalid indentation at line {}. Indentation can only increase by one level at a time",
-                        index + 1
+                        "Invalid indentation at line {line}. Indentation can only increase by one level at a time"
                     )));
                 }
                 if node.indent_level > previous.indent_level && !previous.name.ends_with('/') {
                     return Err(invalid_data(format!(
-                        "File '{}' cannot contain children (line {})",
-                        previous.name,
-                        index + 1
+                        "File '{}' cannot contain children (line {line})",
+                        previous.name
                     )));
                 }
             }
