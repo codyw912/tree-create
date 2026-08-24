@@ -1,10 +1,8 @@
-/target
-
-# Added by dev-init template
 # Rust
 /target/
 **/*.rs.bk
-# Track Cargo.lock by default for application-style repos
+
+# Cargo.lock is tracked because this repository builds an application.
 # IDE
 .vscode/
 .idea/
