@@ -1,6 +1,6 @@
 use std::fs;
 use std::io;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 #[cfg(test)]
 mod tests;
@@ -229,36 +229,160 @@ fn is_ascii_tree(input: &str) -> bool {
 
 pub fn create_tree(input: &str, base_path: &Path, force: bool, dry_run: bool) -> io::Result<()> {
     let tree = TreeStructure::from_string(input)?;
-    let root = &tree.nodes[0];
-    let root_path = base_path.join(root.name.trim_end_matches('/'));
-    create_directory(&root_path, force, dry_run, true)?;
-
-    // parents[level] is the directory that contains nodes at that indentation level.
-    let mut parents = vec![root_path];
-    for node in tree.nodes.iter().skip(1) {
-        let parent = parents.get(node.indent_level - 1).ok_or_else(|| {
-            invalid_data(format!("No parent directory exists for '{}'", node.name))
-        })?;
-        let name = node.name.strip_suffix('/').unwrap_or(&node.name);
-        let full_path = parent.join(name);
-
-        if node.name.ends_with('/') {
-            create_directory(&full_path, force, dry_run, false)?;
-            parents.truncate(node.indent_level);
-            parents.push(full_path);
-        } else {
-            create_file(&full_path, force, dry_run)?;
-        }
-    }
-
-    Ok(())
+    let plan = CreationPlan::build(&tree, base_path, force)?;
+    plan.apply(dry_run)
 }
 
-fn create_directory(path: &Path, force: bool, dry_run: bool, root: bool) -> io::Result<()> {
+#[derive(Debug, PartialEq)]
+enum PlannedAction {
+    CreateDirectory,
+    UseDirectory,
+    ReplaceFileWithDirectory,
+    CreateFile,
+    PreserveFile,
+    OverwriteFile,
+    ReplaceDirectoryWithFile,
+}
+
+impl PlannedAction {
+    fn creates_directory(&self) -> bool {
+        matches!(self, Self::CreateDirectory | Self::ReplaceFileWithDirectory)
+    }
+}
+
+#[derive(Debug, PartialEq)]
+struct PlannedOperation {
+    path: PathBuf,
+    action: PlannedAction,
+}
+
+#[derive(Debug)]
+struct CreationPlan {
+    operations: Vec<PlannedOperation>,
+}
+
+impl CreationPlan {
+    fn build(tree: &TreeStructure, base_path: &Path, force: bool) -> io::Result<Self> {
+        let root = &tree.nodes[0];
+        let root_path = base_path.join(root.name.trim_end_matches('/'));
+        let root_action = plan_directory(&root_path, force, true, false)?;
+        let root_will_be_new = root_action.creates_directory();
+        let mut operations = vec![PlannedOperation {
+            path: root_path.clone(),
+            action: root_action,
+        }];
+
+        // parents[level] is the directory containing nodes at that indentation level.
+        // The boolean records whether that directory will be empty until this plan creates it.
+        let mut parents = vec![(root_path, root_will_be_new)];
+        for node in tree.nodes.iter().skip(1) {
+            let (parent, parent_will_be_new) =
+                parents.get(node.indent_level - 1).ok_or_else(|| {
+                    invalid_data(format!("No parent directory exists for '{}'", node.name))
+                })?;
+            let name = node.name.strip_suffix('/').unwrap_or(&node.name);
+            let full_path = parent.join(name);
+
+            if node.name.ends_with('/') {
+                let action = plan_directory(&full_path, force, false, *parent_will_be_new)?;
+                let will_be_new = *parent_will_be_new || action.creates_directory();
+                parents.truncate(node.indent_level);
+                parents.push((full_path.clone(), will_be_new));
+                operations.push(PlannedOperation {
+                    path: full_path,
+                    action,
+                });
+            } else {
+                operations.push(PlannedOperation {
+                    action: plan_file(&full_path, force, *parent_will_be_new)?,
+                    path: full_path,
+                });
+            }
+        }
+
+        Ok(Self { operations })
+    }
+
+    fn apply(&self, dry_run: bool) -> io::Result<()> {
+        for operation in &self.operations {
+            if dry_run {
+                operation.print_dry_run();
+            } else {
+                operation.apply()?;
+            }
+        }
+        Ok(())
+    }
+}
+
+impl PlannedOperation {
+    fn apply(&self) -> io::Result<()> {
+        match self.action {
+            PlannedAction::CreateDirectory => {
+                fs::create_dir_all(&self.path)?;
+                println!("Created directory: {:?}", self.path);
+            }
+            PlannedAction::UseDirectory => {
+                println!("Using existing directory: {:?}", self.path);
+            }
+            PlannedAction::ReplaceFileWithDirectory => {
+                fs::remove_file(&self.path)?;
+                fs::create_dir_all(&self.path)?;
+                println!("Overwrote file with directory: {:?}", self.path);
+            }
+            PlannedAction::CreateFile => {
+                if let Some(parent) = self.path.parent() {
+                    fs::create_dir_all(parent)?;
+                }
+                fs::File::create(&self.path)?;
+                println!("Created file: {:?}", self.path);
+            }
+            PlannedAction::PreserveFile => {
+                println!("File already exists: {:?}", self.path);
+            }
+            PlannedAction::OverwriteFile => {
+                fs::write(&self.path, "")?;
+                println!("Overwrote existing file: {:?}", self.path);
+            }
+            PlannedAction::ReplaceDirectoryWithFile => {
+                fs::remove_dir_all(&self.path)?;
+                fs::File::create(&self.path)?;
+                println!("Overwrote directory with file: {:?}", self.path);
+            }
+        }
+        Ok(())
+    }
+
+    fn print_dry_run(&self) {
+        let description = match self.action {
+            PlannedAction::CreateDirectory => "create directory",
+            PlannedAction::UseDirectory => "use existing directory",
+            PlannedAction::ReplaceFileWithDirectory => "replace file with directory",
+            PlannedAction::CreateFile => "create file",
+            PlannedAction::PreserveFile => "preserve existing file",
+            PlannedAction::OverwriteFile => "overwrite file",
+            PlannedAction::ReplaceDirectoryWithFile => "replace directory with file",
+        };
+        println!("dry-run Would {description}: {}", self.path.display());
+    }
+}
+
+fn plan_directory(
+    path: &Path,
+    force: bool,
+    root: bool,
+    parent_will_be_new: bool,
+) -> io::Result<PlannedAction> {
+    if parent_will_be_new {
+        return Ok(PlannedAction::CreateDirectory);
+    }
+
     match metadata_if_exists(path)? {
         Some(metadata) if metadata.file_type().is_symlink() => Err(symlink_error(path)),
         Some(metadata) if metadata.is_file() => {
-            if !force {
+            if force {
+                Ok(PlannedAction::ReplaceFileWithDirectory)
+            } else {
                 let message = if root {
                     format!(
                         "A file exists where the root directory is required: {}",
@@ -270,96 +394,44 @@ fn create_directory(path: &Path, force: bool, dry_run: bool, root: bool) -> io::
                         path.display()
                     )
                 };
-                return Err(io::Error::new(io::ErrorKind::AlreadyExists, message));
+                Err(io::Error::new(io::ErrorKind::AlreadyExists, message))
             }
-
-            if dry_run {
-                println!(
-                    "dry-run Would replace file with directory: {}",
-                    path.display()
-                );
-            } else {
-                fs::remove_file(path)?;
-                fs::create_dir_all(path)?;
-                println!("Overwrote file with directory: {:?}", path);
-            }
-            Ok(())
         }
-        Some(metadata) if metadata.is_dir() => {
-            if dry_run {
-                println!("dry-run Would use existing directory: {}", path.display());
-            } else {
-                println!("Using existing directory: {:?}", path);
-            }
-            Ok(())
-        }
+        Some(metadata) if metadata.is_dir() => Ok(PlannedAction::UseDirectory),
         Some(_) => Err(unsupported_file_type_error(path)),
-        None => {
-            if dry_run {
-                println!("dry-run Would create directory: {}", path.display());
-            } else {
-                fs::create_dir_all(path)?;
-                println!("Created directory: {:?}", path);
-            }
-            Ok(())
-        }
+        None => Ok(PlannedAction::CreateDirectory),
     }
 }
 
-fn create_file(path: &Path, force: bool, dry_run: bool) -> io::Result<()> {
+fn plan_file(path: &Path, force: bool, parent_will_be_new: bool) -> io::Result<PlannedAction> {
+    if parent_will_be_new {
+        return Ok(PlannedAction::CreateFile);
+    }
+
     match metadata_if_exists(path)? {
         Some(metadata) if metadata.file_type().is_symlink() => Err(symlink_error(path)),
         Some(metadata) if metadata.is_dir() => {
-            if !force {
-                return Err(io::Error::new(
+            if force {
+                Ok(PlannedAction::ReplaceDirectoryWithFile)
+            } else {
+                Err(io::Error::new(
                     io::ErrorKind::AlreadyExists,
                     format!(
                         "A directory exists where a file is required: {}",
                         path.display()
                     ),
-                ));
+                ))
             }
-
-            if dry_run {
-                println!(
-                    "dry-run Would replace directory with file: {}",
-                    path.display()
-                );
-            } else {
-                fs::remove_dir_all(path)?;
-                fs::File::create(path)?;
-                println!("Overwrote directory with file: {:?}", path);
-            }
-            Ok(())
         }
         Some(metadata) if metadata.is_file() => {
             if force {
-                if dry_run {
-                    println!("dry-run Would overwrite file: {}", path.display());
-                } else {
-                    fs::write(path, "")?;
-                    println!("Overwrote existing file: {:?}", path);
-                }
-            } else if dry_run {
-                println!("dry-run Would preserve existing file: {}", path.display());
+                Ok(PlannedAction::OverwriteFile)
             } else {
-                println!("File already exists: {:?}", path);
+                Ok(PlannedAction::PreserveFile)
             }
-            Ok(())
         }
         Some(_) => Err(unsupported_file_type_error(path)),
-        None => {
-            if dry_run {
-                println!("dry-run Would create file: {}", path.display());
-            } else {
-                if let Some(parent) = path.parent() {
-                    fs::create_dir_all(parent)?;
-                }
-                fs::File::create(path)?;
-                println!("Created file: {:?}", path);
-            }
-            Ok(())
-        }
+        None => Ok(PlannedAction::CreateFile),
     }
 }
 

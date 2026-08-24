@@ -430,3 +430,47 @@ fn test_rejects_symlinked_file_even_with_force() -> io::Result<()> {
     assert_eq!(fs::read_to_string(target)?, "keep this content");
     Ok(())
 }
+
+#[test]
+fn test_late_conflict_is_detected_before_any_mutation() -> io::Result<()> {
+    let dir = tempdir()?;
+    let project = dir.path().join("project");
+    fs::create_dir(&project)?;
+    fs::create_dir(project.join("conflict"))?;
+
+    let result = create_tree(
+        "project/\n  created-before-conflict.txt\n  conflict",
+        dir.path(),
+        false,
+        false,
+    );
+
+    assert_eq!(result.unwrap_err().kind(), io::ErrorKind::AlreadyExists);
+    assert!(!project.join("created-before-conflict.txt").exists());
+    Ok(())
+}
+
+#[cfg(unix)]
+#[test]
+fn test_late_symlink_is_detected_before_force_overwrite() -> io::Result<()> {
+    use std::os::unix::fs::symlink;
+
+    let dir = tempdir()?;
+    let outside = tempdir()?;
+    let project = dir.path().join("project");
+    fs::create_dir(&project)?;
+    let existing = project.join("existing.txt");
+    fs::write(&existing, "keep this content")?;
+    symlink(outside.path(), project.join("linked"))?;
+
+    let result = create_tree(
+        "project/\n  existing.txt\n  linked/",
+        dir.path(),
+        true,
+        false,
+    );
+
+    assert_eq!(result.unwrap_err().kind(), io::ErrorKind::InvalidInput);
+    assert_eq!(fs::read_to_string(existing)?, "keep this content");
+    Ok(())
+}
