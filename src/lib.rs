@@ -245,54 +245,135 @@ pub fn create_tree(input: &str, base_path: &Path, force: bool, dry_run: bool) ->
 }
 
 fn create_directory(path: &Path, force: bool, dry_run: bool, root: bool) -> io::Result<()> {
-    if dry_run {
-        println!("dry-run Would create directory: {}", path.display());
-    } else if path.is_file() {
-        if !force {
-            let message = if root {
-                format!(
-                    "A file exists where the root directory is required: {}",
+    match metadata_if_exists(path)? {
+        Some(metadata) if metadata.file_type().is_symlink() => Err(symlink_error(path)),
+        Some(metadata) if metadata.is_file() => {
+            if !force {
+                let message = if root {
+                    format!(
+                        "A file exists where the root directory is required: {}",
+                        path.display()
+                    )
+                } else {
+                    format!(
+                        "A file exists where a directory is required: {}",
+                        path.display()
+                    )
+                };
+                return Err(io::Error::new(io::ErrorKind::AlreadyExists, message));
+            }
+
+            if dry_run {
+                println!(
+                    "dry-run Would replace file with directory: {}",
                     path.display()
-                )
+                );
             } else {
-                format!(
-                    "A file exists where a directory is required: {}",
-                    path.display()
-                )
-            };
-            return Err(io::Error::new(io::ErrorKind::AlreadyExists, message));
+                fs::remove_file(path)?;
+                fs::create_dir_all(path)?;
+                println!("Overwrote file with directory: {:?}", path);
+            }
+            Ok(())
         }
-        fs::remove_file(path)?;
-        fs::create_dir_all(path)?;
-        println!("Overwrote file with directory: {:?}", path);
-    } else if path.is_dir() {
-        println!("Using existing directory: {:?}", path);
-    } else {
-        fs::create_dir_all(path)?;
-        println!("Created directory: {:?}", path);
+        Some(metadata) if metadata.is_dir() => {
+            if dry_run {
+                println!("dry-run Would use existing directory: {}", path.display());
+            } else {
+                println!("Using existing directory: {:?}", path);
+            }
+            Ok(())
+        }
+        Some(_) => Err(unsupported_file_type_error(path)),
+        None => {
+            if dry_run {
+                println!("dry-run Would create directory: {}", path.display());
+            } else {
+                fs::create_dir_all(path)?;
+                println!("Created directory: {:?}", path);
+            }
+            Ok(())
+        }
     }
-    Ok(())
 }
 
 fn create_file(path: &Path, force: bool, dry_run: bool) -> io::Result<()> {
-    if dry_run {
-        println!("dry-run Would create file: {}", path.display());
-    } else if path.exists() {
-        if force {
-            if path.is_dir() {
-                fs::remove_dir_all(path)?;
+    match metadata_if_exists(path)? {
+        Some(metadata) if metadata.file_type().is_symlink() => Err(symlink_error(path)),
+        Some(metadata) if metadata.is_dir() => {
+            if !force {
+                return Err(io::Error::new(
+                    io::ErrorKind::AlreadyExists,
+                    format!(
+                        "A directory exists where a file is required: {}",
+                        path.display()
+                    ),
+                ));
             }
-            fs::write(path, "")?;
-            println!("Overwrote existing file: {:?}", path);
-        } else {
-            println!("File already exists: {:?}", path);
+
+            if dry_run {
+                println!(
+                    "dry-run Would replace directory with file: {}",
+                    path.display()
+                );
+            } else {
+                fs::remove_dir_all(path)?;
+                fs::File::create(path)?;
+                println!("Overwrote directory with file: {:?}", path);
+            }
+            Ok(())
         }
-    } else {
-        if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent)?;
+        Some(metadata) if metadata.is_file() => {
+            if force {
+                if dry_run {
+                    println!("dry-run Would overwrite file: {}", path.display());
+                } else {
+                    fs::write(path, "")?;
+                    println!("Overwrote existing file: {:?}", path);
+                }
+            } else if dry_run {
+                println!("dry-run Would preserve existing file: {}", path.display());
+            } else {
+                println!("File already exists: {:?}", path);
+            }
+            Ok(())
         }
-        fs::File::create(path)?;
-        println!("Created file: {:?}", path);
+        Some(_) => Err(unsupported_file_type_error(path)),
+        None => {
+            if dry_run {
+                println!("dry-run Would create file: {}", path.display());
+            } else {
+                if let Some(parent) = path.parent() {
+                    fs::create_dir_all(parent)?;
+                }
+                fs::File::create(path)?;
+                println!("Created file: {:?}", path);
+            }
+            Ok(())
+        }
     }
-    Ok(())
+}
+
+fn metadata_if_exists(path: &Path) -> io::Result<Option<fs::Metadata>> {
+    match fs::symlink_metadata(path) {
+        Ok(metadata) => Ok(Some(metadata)),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(error),
+    }
+}
+
+fn symlink_error(path: &Path) -> io::Error {
+    io::Error::new(
+        io::ErrorKind::InvalidInput,
+        format!(
+            "Refusing to follow symbolic link while creating tree: {}",
+            path.display()
+        ),
+    )
+}
+
+fn unsupported_file_type_error(path: &Path) -> io::Error {
+    io::Error::new(
+        io::ErrorKind::InvalidInput,
+        format!("Unsupported filesystem object: {}", path.display()),
+    )
 }

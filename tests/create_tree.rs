@@ -312,3 +312,99 @@ fn test_dry_run_does_not_modify_filesystem() -> io::Result<()> {
     assert!(!dir.path().join("project").exists());
     Ok(())
 }
+
+#[test]
+fn test_file_directory_conflict_requires_force() -> io::Result<()> {
+    let dir = tempdir()?;
+    let path = dir.path().join("project/entry");
+    fs::create_dir_all(&path)?;
+
+    let result = create_tree("project/\n  entry", dir.path(), false, false);
+
+    assert_eq!(result.unwrap_err().kind(), io::ErrorKind::AlreadyExists);
+    assert!(path.is_dir());
+    Ok(())
+}
+
+#[test]
+fn test_force_replaces_directory_with_file() -> io::Result<()> {
+    let dir = tempdir()?;
+    let path = dir.path().join("project/entry");
+    fs::create_dir_all(&path)?;
+    fs::write(path.join("contents.txt"), "preserved without force")?;
+
+    create_tree("project/\n  entry", dir.path(), true, false)?;
+
+    assert!(path.is_file());
+    Ok(())
+}
+
+#[test]
+fn test_directory_file_conflict_requires_force() -> io::Result<()> {
+    let dir = tempdir()?;
+    let path = dir.path().join("project/entry");
+    fs::create_dir_all(path.parent().unwrap())?;
+    fs::write(&path, "contents")?;
+
+    let result = create_tree("project/\n  entry/", dir.path(), false, false);
+
+    assert_eq!(result.unwrap_err().kind(), io::ErrorKind::AlreadyExists);
+    assert_eq!(fs::read_to_string(path)?, "contents");
+    Ok(())
+}
+
+#[test]
+fn test_force_replaces_file_with_directory() -> io::Result<()> {
+    let dir = tempdir()?;
+    let path = dir.path().join("project/entry");
+    fs::create_dir_all(path.parent().unwrap())?;
+    fs::write(&path, "contents")?;
+
+    create_tree("project/\n  entry/", dir.path(), true, false)?;
+
+    assert!(path.is_dir());
+    Ok(())
+}
+
+#[cfg(unix)]
+#[test]
+fn test_rejects_symlinked_directory_even_with_force() -> io::Result<()> {
+    use std::os::unix::fs::symlink;
+
+    let dir = tempdir()?;
+    let outside = tempdir()?;
+    let project = dir.path().join("project");
+    fs::create_dir(&project)?;
+    symlink(outside.path(), project.join("linked"))?;
+
+    let result = create_tree(
+        "project/\n  linked/\n    escaped.txt",
+        dir.path(),
+        true,
+        false,
+    );
+
+    assert_eq!(result.unwrap_err().kind(), io::ErrorKind::InvalidInput);
+    assert!(!outside.path().join("escaped.txt").exists());
+    Ok(())
+}
+
+#[cfg(unix)]
+#[test]
+fn test_rejects_symlinked_file_even_with_force() -> io::Result<()> {
+    use std::os::unix::fs::symlink;
+
+    let dir = tempdir()?;
+    let outside = tempdir()?;
+    let target = outside.path().join("target.txt");
+    fs::write(&target, "keep this content")?;
+    let project = dir.path().join("project");
+    fs::create_dir(&project)?;
+    symlink(&target, project.join("linked.txt"))?;
+
+    let result = create_tree("project/\n  linked.txt", dir.path(), true, false);
+
+    assert_eq!(result.unwrap_err().kind(), io::ErrorKind::InvalidInput);
+    assert_eq!(fs::read_to_string(target)?, "keep this content");
+    Ok(())
+}
