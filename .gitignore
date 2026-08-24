@@ -1,1 +1,23 @@
 /target
+
+# Added by dev-init template
+# Rust
+/target/
+**/*.rs.bk
+# Track Cargo.lock by default for application-style repos
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+# OS
+.DS_Store
+Thumbs.db
+# Development environments
+.direnv/
+.devenv/
+.devcontainer.json
+.pre-commit-config.yaml
+result
+result-*

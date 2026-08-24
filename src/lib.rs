@@ -1,5 +1,5 @@
 use std::fs;
-use std::io::{self, BufRead};
+use std::io;
 use std::path::Path;
 
 #[cfg(test)]
@@ -58,7 +58,11 @@ impl TreeStructure {
                 .count();
 
             // Each level consists of either "│   " (4 chars) or "├── " (4 chars)
-            let indent_level = if prefixes == 0 { 0 } else { (prefixes + 3) / 4 };
+            let indent_level = if prefixes == 0 {
+                0
+            } else {
+                prefixes.div_ceil(4)
+            };
 
             // Extract the name by trimming tree characters
             let name = line
@@ -77,10 +81,12 @@ impl TreeStructure {
             ));
         }
 
-        Ok(Self {
+        let tree = Self {
             nodes,
             indent_width: 2, // Default indent width for output
-        })
+        };
+        tree.validate()?;
+        Ok(tree)
     }
 
     /// Parse simple indented format into our internal representation
@@ -139,57 +145,71 @@ impl TreeStructure {
             ));
         }
 
-        Ok(Self {
+        let tree = Self {
             nodes,
             indent_width: indent_width.unwrap_or(2),
-        })
+        };
+        tree.validate()?;
+        Ok(tree)
     }
 
-    /// Convert the internal representation to ASCII tree format
-    fn to_ascii_tree(&self) -> String {
-        let mut result = Vec::new();
+    fn validate(&self) -> io::Result<()> {
+        let root = &self.nodes[0];
+        if !root.name.ends_with('/') {
+            return Err(invalid_data(
+                "Root node must be a directory ending with '/'",
+            ));
+        }
 
-        // First pass: determine which levels have subsequent siblings
-        let mut level_has_next = [false; 32]; // 32 levels should be enough
+        for (index, node) in self.nodes.iter().enumerate() {
+            validate_node_name(&node.name, index + 1)?;
 
-        for (i, node) in self.nodes.iter().enumerate() {
-            let current_level = node.indent_level;
+            if index > 0 && node.indent_level == 0 {
+                return Err(invalid_data(format!(
+                    "Multiple root nodes are not supported (line {})",
+                    index + 1
+                )));
+            }
 
-            // Look ahead to see if there are any more nodes at this level
-            if let Some(next_node) = self.nodes.get(i + 1) {
-                if next_node.indent_level == current_level {
-                    level_has_next[current_level] = true;
+            if let Some(previous) = index.checked_sub(1).and_then(|i| self.nodes.get(i)) {
+                if node.indent_level > previous.indent_level + 1 {
+                    return Err(invalid_data(format!(
+                        "Invalid indentation at line {}. Indentation can only increase by one level at a time",
+                        index + 1
+                    )));
+                }
+                if node.indent_level > previous.indent_level && !previous.name.ends_with('/') {
+                    return Err(invalid_data(format!(
+                        "File '{}' cannot contain children (line {})",
+                        previous.name,
+                        index + 1
+                    )));
                 }
             }
         }
 
-        // Second pass: generate the tree
-        for node in self.nodes.iter() {
-            let mut prefix = String::new();
-
-            // Add vertical lines for previous levels that have subsequent nodes
-            prefix.extend(
-                level_has_next
-                    .iter()
-                    .take(node.indent_level)
-                    .skip(1)
-                    .map(|&has_next| if has_next { "│   " } else { "    " }),
-            );
-
-            // Add the appropriate branch character
-            if node.indent_level > 0 {
-                prefix.push_str(if level_has_next[node.indent_level] {
-                    "├── "
-                } else {
-                    "└── "
-                });
-            }
-
-            result.push(format!("{}{}", prefix, node.name));
-        }
-
-        result.join("\n")
+        Ok(())
     }
+}
+
+fn invalid_data(message: impl Into<String>) -> io::Error {
+    io::Error::new(io::ErrorKind::InvalidData, message.into())
+}
+
+fn validate_node_name(name: &str, line: usize) -> io::Result<()> {
+    let path_name = name.strip_suffix('/').unwrap_or(name);
+    if path_name.is_empty()
+        || path_name == "."
+        || path_name == ".."
+        || path_name.contains('/')
+        || path_name.contains('\\')
+    {
+        return Err(invalid_data(format!(
+            "Invalid path name '{}' at line {}: names must be a single safe path component",
+            name, line
+        )));
+    }
+    Ok(())
 }
 
 /// Check if input is using ASCII tree format
@@ -198,115 +218,162 @@ fn is_ascii_tree(input: &str) -> bool {
 }
 
 pub fn create_tree(input: &str, base_path: &Path, force: bool, dry_run: bool) -> io::Result<()> {
-    // Convert the input to our internal representation
     let tree = TreeStructure::from_string(input)?;
+    let root = &tree.nodes[0];
+    let root_path = base_path.join(root.name.trim_end_matches('/'));
+    create_directory(&root_path, force, dry_run, true)?;
 
-    // Then convert to ASCII tree format for processing
-    let ascii_tree = tree.to_ascii_tree();
+    // parents[level] is the directory that contains nodes at that indentation level.
+    let mut parents = vec![root_path];
+    for node in tree.nodes.iter().skip(1) {
+        let parent = parents.get(node.indent_level - 1).ok_or_else(|| {
+            invalid_data(format!("No parent directory exists for '{}'", node.name))
+        })?;
+        let name = node.name.strip_suffix('/').unwrap_or(&node.name);
+        let full_path = parent.join(name);
 
-    let reader = io::BufReader::new(ascii_tree.as_bytes());
-    let mut lines = reader.lines().peekable();
-
-    // Get the root directory name from the first line
-    let root_name = if let Some(Ok(first_line)) = lines.next() {
-        first_line.trim_end_matches('/').to_string()
-    } else {
-        return Err(io::Error::new(io::ErrorKind::InvalidData, "Input is empty"));
-    };
-
-    let base_path = base_path.join(&root_name);
-    if dry_run {
-        println!("dry-run Would create directory: {}", base_path.display());
-    } else if base_path.exists() {
-        if force {
-            if base_path.is_file() {
-                fs::remove_file(&base_path)?;
-            } else {
-                fs::remove_dir_all(&base_path)?;
-            }
-            fs::create_dir_all(&base_path)?;
-            println!("Overwrote existing directory: {:?}", base_path);
+        if node.name.ends_with('/') {
+            create_directory(&full_path, force, dry_run, false)?;
+            parents.truncate(node.indent_level);
+            parents.push(full_path);
         } else {
-            println!("Directory already exists: {:?}", base_path);
-        }
-    } else {
-        fs::create_dir_all(&base_path)?;
-        println!("Created root directory: {:?}", base_path);
-    }
-
-    let mut current_depth = 0;
-    let mut path_stack = vec![base_path.clone()];
-
-    for line in lines {
-        let line = line?;
-        let depth = line
-            .chars()
-            .take_while(|&c| c == ' ' || c == '│' || c == '└' || c == '├')
-            .count()
-            / 4;
-        let name = line
-            .trim_start_matches(|c: char| {
-                c.is_whitespace() || c == '│' || c == '└' || c == '├' || c == '─'
-            })
-            .to_string();
-
-        // Adjust the path stack based on the new depth
-        while depth < current_depth && !path_stack.is_empty() {
-            path_stack.pop();
-            current_depth -= 1;
-        }
-        current_depth = depth;
-
-        let mut full_path = path_stack
-            .last()
-            .cloned()
-            .unwrap_or_else(|| base_path.clone());
-        full_path.push(&name);
-
-        if name.ends_with('/') {
-            if dry_run {
-                println!("dry-run Would create directory: {}", full_path.display());
-            } else if full_path.exists() {
-                if force {
-                    if full_path.is_file() {
-                        fs::remove_file(&full_path)?;
-                        fs::create_dir_all(&full_path)?;
-                        println!("Overwrote file with directory: {:?}", full_path);
-                    } else {
-                        println!("Using existing directory: {:?}", full_path);
-                    }
-                } else {
-                    println!("Directory already exists: {:?}", full_path);
-                }
-            } else {
-                fs::create_dir_all(&full_path)?;
-                println!("Created directory: {:?}", full_path);
-            }
-            path_stack.push(full_path);
-        } else {
-            if dry_run {
-                println!("dry-run Would create file: {}", full_path.display());
-            } else {
-                if let Some(parent) = full_path.parent() {
-                    fs::create_dir_all(parent)?;
-                }
-                if full_path.exists() {
-                    if force {
-                        if full_path.is_dir() {
-                            fs::remove_dir_all(&full_path)?;
-                        }
-                        fs::write(&full_path, "")?;
-                        println!("Overwrote existing file: {:?}", full_path);
-                    } else {
-                        println!("File already exists: {:?}", full_path);
-                    }
-                } else {
-                    fs::File::create(&full_path)?;
-                    println!("Created file: {:?}", full_path);
-                }
-            }
+            create_file(&full_path, force, dry_run)?;
         }
     }
 
     Ok(())
+}
+
+fn create_directory(path: &Path, force: bool, dry_run: bool, root: bool) -> io::Result<()> {
+    match metadata_if_exists(path)? {
+        Some(metadata) if metadata.file_type().is_symlink() => Err(symlink_error(path)),
+        Some(metadata) if metadata.is_file() => {
+            if !force {
+                let message = if root {
+                    format!(
+                        "A file exists where the root directory is required: {}",
+                        path.display()
+                    )
+                } else {
+                    format!(
+                        "A file exists where a directory is required: {}",
+                        path.display()
+                    )
+                };
+                return Err(io::Error::new(io::ErrorKind::AlreadyExists, message));
+            }
+
+            if dry_run {
+                println!(
+                    "dry-run Would replace file with directory: {}",
+                    path.display()
+                );
+            } else {
+                fs::remove_file(path)?;
+                fs::create_dir_all(path)?;
+                println!("Overwrote file with directory: {:?}", path);
+            }
+            Ok(())
+        }
+        Some(metadata) if metadata.is_dir() => {
+            if dry_run {
+                println!("dry-run Would use existing directory: {}", path.display());
+            } else {
+                println!("Using existing directory: {:?}", path);
+            }
+            Ok(())
+        }
+        Some(_) => Err(unsupported_file_type_error(path)),
+        None => {
+            if dry_run {
+                println!("dry-run Would create directory: {}", path.display());
+            } else {
+                fs::create_dir_all(path)?;
+                println!("Created directory: {:?}", path);
+            }
+            Ok(())
+        }
+    }
+}
+
+fn create_file(path: &Path, force: bool, dry_run: bool) -> io::Result<()> {
+    match metadata_if_exists(path)? {
+        Some(metadata) if metadata.file_type().is_symlink() => Err(symlink_error(path)),
+        Some(metadata) if metadata.is_dir() => {
+            if !force {
+                return Err(io::Error::new(
+                    io::ErrorKind::AlreadyExists,
+                    format!(
+                        "A directory exists where a file is required: {}",
+                        path.display()
+                    ),
+                ));
+            }
+
+            if dry_run {
+                println!(
+                    "dry-run Would replace directory with file: {}",
+                    path.display()
+                );
+            } else {
+                fs::remove_dir_all(path)?;
+                fs::File::create(path)?;
+                println!("Overwrote directory with file: {:?}", path);
+            }
+            Ok(())
+        }
+        Some(metadata) if metadata.is_file() => {
+            if force {
+                if dry_run {
+                    println!("dry-run Would overwrite file: {}", path.display());
+                } else {
+                    fs::write(path, "")?;
+                    println!("Overwrote existing file: {:?}", path);
+                }
+            } else if dry_run {
+                println!("dry-run Would preserve existing file: {}", path.display());
+            } else {
+                println!("File already exists: {:?}", path);
+            }
+            Ok(())
+        }
+        Some(_) => Err(unsupported_file_type_error(path)),
+        None => {
+            if dry_run {
+                println!("dry-run Would create file: {}", path.display());
+            } else {
+                if let Some(parent) = path.parent() {
+                    fs::create_dir_all(parent)?;
+                }
+                fs::File::create(path)?;
+                println!("Created file: {:?}", path);
+            }
+            Ok(())
+        }
+    }
+}
+
+fn metadata_if_exists(path: &Path) -> io::Result<Option<fs::Metadata>> {
+    match fs::symlink_metadata(path) {
+        Ok(metadata) => Ok(Some(metadata)),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(error),
+    }
+}
+
+fn symlink_error(path: &Path) -> io::Error {
+    io::Error::new(
+        io::ErrorKind::InvalidInput,
+        format!(
+            "Refusing to follow symbolic link while creating tree: {}",
+            path.display()
+        ),
+    )
+}
+
+fn unsupported_file_type_error(path: &Path) -> io::Error {
+    io::Error::new(
+        io::ErrorKind::InvalidInput,
+        format!("Unsupported filesystem object: {}", path.display()),
+    )
 }

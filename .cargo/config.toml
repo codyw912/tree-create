@@ -1,0 +1,8 @@
+# Cargo configuration for reliable macOS linking
+# This ensures clang is used as the linker, which works well with Nix's compiler wrapper
+
+[target.aarch64-apple-darwin]
+linker = "clang"
+
+[target.x86_64-apple-darwin]
+linker = "clang"
