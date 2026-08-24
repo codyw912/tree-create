@@ -1,12 +1,12 @@
-{ pkgs, lib, config, inputs, ... }:
+{ pkgs, lib, config, ... }:
 
 {
-  imports = [
-    (inputs.nix-config + "/devenv/modules/devcontainer-sandbox.nix")
-  ];
-
   devenv.root = lib.mkDefault (
-    if builtins.pathExists "/workspace" then "/workspace" else builtins.getEnv "PWD"
+    if builtins.pathExists "/workspace" then
+      "/workspace"
+    else
+      let pwd = builtins.getEnv "PWD";
+      in if pwd != "" then pwd else toString ./.
   );
 
   # https://devenv.sh/basics/

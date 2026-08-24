@@ -35,6 +35,16 @@ Use the `-i` or `--inline` flag to input the structure directly in the terminal:
 tree-create -i
 ```
 
+### Preview Changes
+
+Use `-n` or `--dry-run` with file or inline input to validate the complete tree and preview each filesystem action without changing anything:
+
+```bash
+tree-create --dry-run input.txt
+```
+
+The preview reports whether each path would be created, preserved, overwritten, reused, or replaced. Conflicts and symbolic links are rejected before any changes are applied.
+
 ## Input Formats
 
 `tree-create` supports two input formats:
@@ -126,6 +136,8 @@ When using `--force`:
 
 **Note:** Be careful with `--force` as it will overwrite files without confirmation.
 
+`tree-create` refuses to follow symbolic links in paths named by the input, including when `--force` is used.
+
 ## Supported Editors
 
 The following editors are explicitly supported for interactive mode:
@@ -134,3 +146,24 @@ The following editors are explicitly supported for interactive mode:
 - VS Code (automatically adds `--wait` flag)
 
 Other editors may work but are not officially supported.
+
+## Development
+
+The standard Rust toolchain is sufficient:
+
+```bash
+cargo test
+cargo fmt --all -- --check
+cargo clippy --all-targets --all-features -- -D warnings
+```
+
+The repository also provides a reproducible Nix/devenv shell and matching `just` recipes:
+
+```bash
+direnv allow       # optional automatic shell activation
+nix develop        # manual shell activation
+just test
+just lint
+```
+
+Run `just` to list all common project commands. Pull requests run formatting, Clippy, and the complete test suite in CI.
